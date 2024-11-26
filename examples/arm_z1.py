@@ -1,18 +1,17 @@
 from pathlib import Path
 
-import numpy as np
 import mujoco
 import mujoco.viewer
+import numpy as np
 from loop_rate_limiters import RateLimiter
-
-import mink
-
 import typing
 import keyboard  # Library for capturing keyboard inputs.
 
 from typing import Optional
+import mink
+
 _HERE = Path(__file__).parent
-_XML = _HERE / "unitree_go1" / "scene.xml"
+_XML = _HERE / "unitree_z1" / "scene.xml"
 
 def move_target(
     model: mujoco.MjModel,
@@ -46,38 +45,44 @@ if __name__ == "__main__":
 
     configuration = mink.Configuration(model)
 
-    feet = ["FL", "FR", "RR", "RL"]
-
-    base_task = mink.FrameTask(
-        frame_name="trunk",
-        frame_type="body",
-        position_cost=1.0,
-        orientation_cost=1.0,
-    )
-
-    posture_task = mink.PostureTask(model, cost=1e-5)
-
-    feet_tasks = []
-    for foot in feet:
-        task = mink.FrameTask(
-            frame_name=foot,
+    tasks = [
+        end_effector_task := mink.FrameTask(
+            frame_name="attachment_site",
             frame_type="site",
             position_cost=1.0,
-            orientation_cost=0.0,
-        )
-        feet_tasks.append(task)
+            orientation_cost=1.0,
+            lm_damping=1.0,
+        ),
+    ]
 
-    tasks = [base_task, posture_task, *feet_tasks]
+    # Enable collision avoidance between the following geoms:
+    collision_pairs = [
+        (["link06"], ["floor", "wall"]),
+    ]
 
-    move_speed = 0.01  # Adjust as needed.
-    target_position = np.array([0.5, 0.3, 0.2])  # Use a NumPy array for mutable storage.
-    base_mid = model.body("trunk_target").mocapid[0]
-    feet_mid = [model.body(f"{foot}_target").mocapid[0] for foot in feet]
+    limits = [
+        mink.ConfigurationLimit(model=model),
+        mink.CollisionAvoidanceLimit(model=model, geom_pairs=collision_pairs),
+    ]
+
+    max_velocities = {
+        "joint1": np.pi,
+        "joint2": np.pi,
+        "joint3": np.pi,
+        "joint4": np.pi,
+        "joint5": np.pi,
+        "joint6": np.pi,
+    }
+    velocity_limit = mink.VelocityLimit(model, max_velocities)
+    limits.append(velocity_limit)
 
     model = configuration.model
     data = configuration.data
     solver = "quadprog"
 
+    # Target movement speed per key press.
+    move_speed = 0.01  # Adjust as needed.
+    target_position = np.array([0.5, 0.3, 0.2])  # Use a NumPy array for mutable storage.
     with mujoco.viewer.launch_passive(
         model=model, data=data, show_left_ui=False, show_right_ui=False
     ) as viewer:
@@ -85,16 +90,13 @@ if __name__ == "__main__":
 
         # Initialize to the home keyframe.
         configuration.update_from_keyframe("home")
-        posture_task.set_target_from_configuration(configuration)
 
-        # Initialize mocap bodies at their respective sites.
-        for foot in feet:
-            mink.move_mocap_to_frame(model, data, f"{foot}_target", foot, "site")
-        mink.move_mocap_to_frame(model, data, "trunk_target", "trunk", "body")
+        # Initialize the mocap target at the end-effector site.
+        mink.move_mocap_to_frame(model, data, "target", "attachment_site", "site")
 
         rate = RateLimiter(frequency=500.0, warn=False)
-        while viewer.is_running():
 
+        while viewer.is_running():
             # Handle keyboard inputs.
             if keyboard.is_pressed("left"):
                 target_position[0] -= move_speed
@@ -113,19 +115,22 @@ if __name__ == "__main__":
             move_target(
                 model=model,
                 data=data,
-                target_name="FL_target",
+                target_name="target",
                 new_position=target_position,
             )
-            # Update task targets.
-            base_task.set_target(mink.SE3.from_mocap_id(data, base_mid))
-            for i, task in enumerate(feet_tasks):
-                task.set_target(mink.SE3.from_mocap_id(data, feet_mid[i]))
 
-            # Compute velocity, integrate and set control signal.
-            vel = mink.solve_ik(configuration, tasks, rate.dt, solver, 1e-5)
+            # Update task target.
+            T_wt = mink.SE3.from_mocap_name(model, data, "target")
+            end_effector_task.set_target(T_wt)
+
+            # Compute velocity and integrate into the next configuration.
+            vel = mink.solve_ik(
+                configuration, tasks, rate.dt, solver, 1e-3, limits=limits
+            )
             configuration.integrate_inplace(vel, rate.dt)
             mujoco.mj_camlight(model, data)
 
             # Visualize at fixed FPS.
             viewer.sync()
             rate.sleep()
+

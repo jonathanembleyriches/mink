@@ -4,41 +4,12 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 from loop_rate_limiters import RateLimiter
-import typing
-import keyboard  # Library for capturing keyboard inputs.
 
-from typing import Optional
 import mink
 
 _HERE = Path(__file__).parent
 _XML = _HERE / "universal_robots_ur5e" / "scene.xml"
 
-def move_target(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    target_name: str,
-    new_position: Optional[np.ndarray] = None,
-    offset: Optional[np.ndarray] = None,
-) -> None:
-    """
-    Move the target location to a new position or by an offset.
-
-    Args:
-        model: Mujoco model.
-        data: Mujoco data.
-        target_name: The name of the target body or site to move.
-        new_position: The new position (x, y, z) for the target. If specified, 
-                      the target will be set to this position.
-        offset: An optional offset (dx, dy, dz) to apply to the current position.
-                Ignored if `new_position` is provided.
-    """
-    if new_position is not None:
-        data.mocap_pos[model.body(target_name).mocapid[0]] = new_position
-    elif offset is not None:
-        current_pos = data.mocap_pos[model.body(target_name).mocapid[0]]
-        data.mocap_pos[model.body(target_name).mocapid[0]] = current_pos + offset
-    else:
-        raise ValueError("Either new_position or offset must be provided.")
 
 if __name__ == "__main__":
     model = mujoco.MjModel.from_xml_path(_XML.as_posix())
@@ -76,13 +47,10 @@ if __name__ == "__main__":
     velocity_limit = mink.VelocityLimit(model, max_velocities)
     limits.append(velocity_limit)
 
+    mid = model.body("target").mocapid[0]
     model = configuration.model
     data = configuration.data
     solver = "quadprog"
-
-    # Target movement speed per key press.
-    move_speed = 0.01  # Adjust as needed.
-    target_position = np.array([0.5, 0.3, 0.2])  # Use a NumPy array for mutable storage.
 
     with mujoco.viewer.launch_passive(
         model=model, data=data, show_left_ui=False, show_right_ui=False
@@ -96,30 +64,7 @@ if __name__ == "__main__":
         mink.move_mocap_to_frame(model, data, "target", "attachment_site", "site")
 
         rate = RateLimiter(frequency=500.0, warn=False)
-
         while viewer.is_running():
-            # Handle keyboard inputs.
-            if keyboard.is_pressed("left"):
-                target_position[0] -= move_speed
-            if keyboard.is_pressed("right"):
-                target_position[0] += move_speed
-            if keyboard.is_pressed("up"):
-                target_position[1] += move_speed
-            if keyboard.is_pressed("down"):
-                target_position[1] -= move_speed
-            if keyboard.is_pressed("w"):  # Move up in z-axis
-                target_position[2] += move_speed
-            if keyboard.is_pressed("s"):  # Move down in z-axis
-                target_position[2] -= move_speed
-
-            # Move target to the new position based on keyboard input.
-            move_target(
-                model=model,
-                data=data,
-                target_name="target",
-                new_position=target_position,
-            )
-
             # Update task target.
             T_wt = mink.SE3.from_mocap_name(model, data, "target")
             end_effector_task.set_target(T_wt)
@@ -131,7 +76,11 @@ if __name__ == "__main__":
             configuration.integrate_inplace(vel, rate.dt)
             mujoco.mj_camlight(model, data)
 
+            # Note the below are optional: they are used to visualize the output of the
+            # fromto sensor which is used by the collision avoidance constraint.
+            mujoco.mj_fwdPosition(model, data)
+            mujoco.mj_sensorPos(model, data)
+
             # Visualize at fixed FPS.
             viewer.sync()
             rate.sleep()
-
