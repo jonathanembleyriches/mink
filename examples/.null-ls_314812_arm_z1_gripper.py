@@ -13,8 +13,6 @@ import typing
 from typing import Optional
 import mink
 from scipy.spatial.transform import Rotation as R  # For quaternion manipulation.
-from pyjoycon import GyroTrackingJoyCon, get_R_id
-import time
 
 _HERE = Path(__file__).parent
 _XML = _HERE / "kuka_iiwa_14" / "scene.xml"
@@ -118,7 +116,7 @@ if __name__ == "__main__":
     max_iters = 20
 
     move_speed = 0.01  # Adjust as needed.
-    target_position = np.array([0.2, 0.2, 0.2])  # Use a NumPy array for mutable storage.
+    target_position = np.array([0.5, 0.3, 0.2])  # Use a NumPy array for mutable storage.
     rotation_speed = 0.05
     target_rotation = np.array([1.0, 0.0, 0.0, 0.0]) 
     with mujoco.viewer.launch_passive(
@@ -135,19 +133,9 @@ if __name__ == "__main__":
         mink.move_mocap_to_frame(model, data, "target", "attachment_site", "site")
 
         rate = RateLimiter(frequency=500.0, warn=False)
-
-        joycon_id = get_R_id()
-        joycon = GyroTrackingJoyCon(*joycon_id)
-        t = 0.0
         while viewer.is_running():
             # Update task target.
 
-            print("joycon pointer:  ", joycon.pointer)
-            print("joycon rotation: ", joycon.rotation)
-            print("joycon direction:", joycon.direction)
-            target_position[2] = 0.3 * np.sin(2.0 * t)
-
-            t += rate.dt
             # Handle keyboard inputs.
             # if keyboard.is_pressed("left"):
             #     target_position[0] -= move_speed
@@ -196,13 +184,13 @@ if __name__ == "__main__":
                 if pos_achieved and ori_achieved:
                     break
 
-
             data.ctrl = configuration.q
             mujoco.mj_step(model, data)
             joint_state_msg.name = [model.joint(i).name for i in range(model.njnt)]
             joint_state_msg.position = [data.qpos[model.jnt_qposadr[i]] for i in range(model.njnt)]
             joint_state_msg.velocity = [data.qvel[model.jnt_dofadr[i]] for i in range(model.njnt)]
             joint_state_msg.effort = [data.qfrc_applied[model.jnt_dofadr[i]] for i in range(model.njnt)]
+            print(joint_state_msg)
 
             # Publish the JointState message
             joint_state_pub.publish(joint_state_msg)
